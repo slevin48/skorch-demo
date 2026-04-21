@@ -68,3 +68,52 @@ for name, report in reports.items():
 
 Set `SKORE_WORKSPACE` in your environment (or edit the cell) to a workspace
 you own. These cells are not auto-executed because they need interactive auth.
+
+### Gotchas for PyTorch models on skore hub (as of `skore-hub-project` 0.0.22)
+
+Two constraints bite PyTorch/skorch users that don't apply to the local backend:
+
+1. **X must be ≤ 2D.** Local `EstimatorReport` only calls `estimator.predict(X)` and
+   never validates shape. The hub push path runs sklearn's `check_array` while
+   building the payload, which rejects any `X` with `ndim > 2` — so a sequence
+   model taking `(n_samples, lookback, channels)` will fail with
+   `ValueError: Found array with dim 3, while dim <= 2 is required.`
+
+   Workaround: present a 2D view to skore and reshape to 3D inside the wrapper.
+   In this repo `SkorchRegressor._to_3d` re-adds the channel axis before calling
+   `self.net.predict(...)`, and `EstimatorReport` is given `X.squeeze(-1)`.
+
+2. **`predict_proba` must not be exposed on a regressor.** skorch's
+   `NeuralNet.predict` internally calls `self.predict_proba(X)`, which makes
+   skore's response-method probe (used when caching predictions) mis-detect the
+   estimator as a classifier and try to read `classes_`.
+
+   Workaround: wrap the fitted net in a `BaseEstimator + RegressorMixin` subclass
+   that only exposes `fit` / `predict`. `RegressorMixin` sets
+   `_estimator_type = "regressor"` and the missing `predict_proba` keeps the
+   probe on the regression code path.
+
+Together the wrapper looks like:
+
+```python
+class SkorchRegressor(BaseEstimator, RegressorMixin):
+    def __init__(self, net, lookback):
+        self.net = net
+        self.lookback = lookback
+
+    def _to_3d(self, X):
+        X = np.asarray(X, dtype="float32")
+        return X[..., np.newaxis] if X.ndim == 2 else X
+
+    def fit(self, X, y):
+        self.net.fit(self._to_3d(X), y)
+        return self
+
+    def predict(self, X):
+        return self.net.predict(self._to_3d(X)).ravel()
+```
+
+Train the skorch net on the native 3D tensor as usual, then build the
+`EstimatorReport` with the 2D view (`X.squeeze(-1)`) and pass the wrapper as the
+estimator. `project.put(key, report)` then succeeds for both LSTM and MLP
+modules.
