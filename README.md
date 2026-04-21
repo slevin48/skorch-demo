@@ -13,6 +13,8 @@ compared with [skore](https://skore.probabl.ai/) (evaluation & reporting).
   4. Run a 24-month rolling multi-step forecast
   5. Sweep architectures (LSTM vs MLP), optimizers (Adam vs SGD), hidden sizes
      and learning rates, then compare them with `skore.ComparisonReport`
+  6. Push every report to [skore hub](https://hub.probabl.ai/) via
+     `skore-hub-project` for browsing in the hub UI
 - `pyproject.toml` / `uv.lock` — dependencies managed by [uv](https://docs.astral.sh/uv/)
 
 ## Setup
@@ -50,3 +52,19 @@ comparison = ComparisonReport(reports)
 summary = comparison.metrics.summarize().frame()       # metrics table
 comparison.metrics.prediction_error().plot()           # predicted-vs-actual
 ```
+
+## Pushing to skore hub
+
+The last section of the notebook persists every sweep report to
+[skore hub](https://hub.probabl.ai/). It runs `skore.login()` (device-code
+browser flow), then opens a hub-backed project and uploads each report:
+
+```python
+skore.login()
+project = skore.Project(name="skorch-airpassengers-demo", mode="hub", workspace=WORKSPACE)
+for name, report in reports.items():
+    project.put(name, report)
+```
+
+Set `SKORE_WORKSPACE` in your environment (or edit the cell) to a workspace
+you own. These cells are not auto-executed because they need interactive auth.
